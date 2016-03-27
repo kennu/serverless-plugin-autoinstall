@@ -5,28 +5,28 @@
  * Kenneth Falck <kennu@iki.fi> 2016
  */
 
-module.exports = function(ServerlessPlugin, serverlessPath) { // Always pass in the ServerlessPlugin Class
-
+module.exports = function(S) {
   const path    = require('path'),
       fs        = require('fs'),
-      SUtils    = require(path.join(serverlessPath, 'utils/index')),
-      SCli      = require(path.join(serverlessPath, 'utils/cli')),
+      SUtils    = require(S.getServerlessPath('utils')),
+      SCli      = require(S.getServerlessPath('utils/cli')),
+      SError    = require(S.getServerlessPath('Error')),
       BbPromise = require('bluebird'); // Serverless uses Bluebird Promises and we recommend you do to because they provide more than your average Promise :)
 
   /**
    * ServerlessPluginAutoinstall
    */
 
-  class ServerlessPluginAutoinstall extends ServerlessPlugin {
+  class ServerlessPluginAutoinstall extends S.classes.Plugin {
 
     /**
      * Constructor
      * - Keep this and don't touch it unless you know what you're doing.
      */
 
-    constructor(S) {
-      super(S);
-      this.alreadyInstalledComponents = {};
+    constructor() {
+      super();
+      this.alreadyInstalledPaths = {};
     }
 
     /**
@@ -47,13 +47,25 @@ module.exports = function(ServerlessPlugin, serverlessPath) { // Always pass in 
      */
 
     registerActions() {
-      this.S.addAction(this.autoinstall.bind(this), {
+      S.addAction(this.autoinstall.bind(this), {
         handler:        'autoinstall',
-        description:    'Automatically runs npm install in each Component folder',
-        context:        'component',
+        description:    'Automatically runs npm install in each function folder that contains a package.json',
+        context:        'function',
         contextAction:  'autoinstall',
-        options:        [],
-        parameters:     []
+        options:        [
+          {
+            option:      'all',
+            shortcut:    'a',
+            description: 'Autoinstall all functions'
+          }
+        ],
+        parameters:      [
+          {
+            parameter:   'function',
+            description: 'Function to autoinstall (use -a for all)',
+            position:    '0->'
+          }
+        ]
       });
       return BbPromise.resolve();
     }
@@ -65,7 +77,7 @@ module.exports = function(ServerlessPlugin, serverlessPath) { // Always pass in 
      */
 
     registerHooks() {
-      this.S.addHook(this._preCodePackageLambda.bind(this), {
+      S.addHook(this._preCodePackageLambda.bind(this), {
         action: 'codePackageLambda',
         event:  'pre'
       });
@@ -77,41 +89,86 @@ module.exports = function(ServerlessPlugin, serverlessPath) { // Always pass in 
      * Post deploy install hook
      * - Be sure to ALWAYS accept and return the "evt" object, or you will break the entire flow.
      * - The "evt" object contains Action-specific data.  You can add custom data to it, but if you change any data it will affect subsequent Actions and Hooks.
-     * - You can also access other Project-specific data @ this.S Again, if you mess with data on this object, it could break everything, so make sure you know what you're doing ;)
+     * - You can also access other Project-specific data @ S Again, if you mess with data on this object, it could break everything, so make sure you know what you're doing ;)
      */
 
     _preCodePackageLambda(evt) {
-      let func = this.S.state.getFunctions({ paths: [evt.options.path] })[0];
-      if (func) {
-        let component = func.getComponent();
-        if (!this.alreadyInstalledComponents[component.name]) {
-          this.alreadyInstalledComponents[component.name] = true;
-          return this.autoinstallComponent(component.name, component._config.fullPath)
-          .then(function () {
-            return evt;
-          });
-        }
-      }
-      return Promise.resolve(evt);
-    }
-
-    autoinstall(evt) {
-      let self = this;
-      let components = this.S.state.project.components;
-      var promise = BbPromise.resolve();
-      Object.keys(components).map(function (componentName) {
-        promise = promise.then(function () {
-          return self.autoinstallComponent(componentName, components[componentName]._config.fullPath);
-        });
-      });
-      return promise.then(function () {
+      return this.autoinstallFunction(S.getProject().getFunction(evt.options.name))
+      .then(() => {
         return evt;
       });
     }
 
-    autoinstallComponent(componentName, fullPath) {
-      SCli.log('Autoinstalling component ' + componentName + ' in ' + fullPath);
-      SUtils.npmInstall(fullPath);
+    autoinstall(evt) {
+      var promise = BbPromise.resolve();
+      var project = S.getProject();
+      var functions = Object.keys(project.functions).map(functionName => project.functions[functionName]);
+      var found = 0;
+
+      if (!evt.options.all && !evt.options.function.length) {
+        return BbPromise.reject(new SError('Function name or -a required'));
+      }
+
+      if (!evt.options.all) {
+        // Select specified functions
+        var errors = 0;
+        functions = evt.options.function.map((functionName) => {
+          var fn = project.getFunction(functionName);
+          if (!fn) {
+            SCli.log('Function not found: ' + functionName);
+            errors += 1;
+          }
+          return fn;
+        });
+        if (errors) {
+          return BbPromise.reject(new SError('Function not found'));
+        }
+      }
+
+      return BbPromise.resolve()
+      .then(() => {
+        functions.map((fn) => {
+          promise = promise.then(() => {
+            return this.autoinstallFunction(fn);
+          });
+        });
+        return promise;
+      })
+      .then(() => {
+        return evt;
+      });
+    }
+
+    autoinstallFunction(fn) {
+      if (fn.runtime !== 'nodejs') {
+        // Ignore non-node functions
+        return Promise.resolve();
+      }
+      var absProjectPath = path.resolve(S.getProject().getRootPath());
+      var absFunctionPath = path.resolve(fn.getRootPath());
+      var prevPath;
+      var packagePath;
+
+      // Try to find a function parent path with package.json
+      while (absFunctionPath.length > absProjectPath.length && absFunctionPath != prevPath && !packagePath) {
+        var packageJsonPath = path.join(absFunctionPath, 'package.json');
+        if (fs.existsSync(packageJsonPath)) {
+          // Found it!
+          packagePath = absFunctionPath;
+        }
+        absFunctionPath = path.resolve(absFunctionPath, '..');
+      }
+      if (packagePath) {
+        if (!this.alreadyInstalledPaths[packagePath]) {
+          this.alreadyInstalledPaths[packagePath] = true;
+          SCli.log('Autoinstalling function ' + fn.getName() + ': ' + packagePath);
+          SUtils.npmInstall(packagePath);
+        } else {
+          SCli.log('Skipping function autoinstall (already installed): ' + fn.getName());
+        }
+      } else {
+        SCli.log('Skipping function autoinstall (package.json not found): ' + fn.getName());
+      }
       return Promise.resolve();
     }
   }
