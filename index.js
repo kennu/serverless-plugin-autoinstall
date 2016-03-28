@@ -48,7 +48,7 @@ module.exports = function(S) {
 
     registerActions() {
       S.addAction(this.autoinstall.bind(this), {
-        handler:        'autoinstall',
+        handler:        'functionAutoinstall',
         description:    'Automatically runs npm install in each function folder that contains a package.json',
         context:        'function',
         contextAction:  'autoinstall',
