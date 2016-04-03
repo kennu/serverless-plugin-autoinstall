@@ -161,13 +161,9 @@ module.exports = function(S) {
       if (packagePath) {
         if (!this.alreadyInstalledPaths[packagePath]) {
           this.alreadyInstalledPaths[packagePath] = true;
-          SCli.log('Autoinstalling function ' + fn.getName() + ': ' + packagePath);
+          SCli.log('Autoinstalling package ' + packagePath);
           SUtils.npmInstall(packagePath);
-        } else {
-          SCli.log('Skipping function autoinstall (already installed): ' + fn.getName());
         }
-      } else {
-        SCli.log('Skipping function autoinstall (package.json not found): ' + fn.getName());
       }
       return Promise.resolve();
     }
