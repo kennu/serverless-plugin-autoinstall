@@ -162,7 +162,9 @@ module.exports = function(S) {
         if (!this.alreadyInstalledPaths[packagePath]) {
           this.alreadyInstalledPaths[packagePath] = true;
           SCli.log('Autoinstalling package ' + packagePath);
+          let previousDirectory = process.cwd();
           SUtils.npmInstall(packagePath);
+          process.chdir(previousDirectory);
         }
       }
       return Promise.resolve();
