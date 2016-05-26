@@ -140,7 +140,7 @@ module.exports = function(S) {
     }
 
     autoinstallFunction(fn) {
-      if (!fn.runtime.match(/^nodejs/)) {
+      if (!fn.runtime.match(/^nodejs|^babel$/)) {
         // Ignore non-node functions
         return Promise.resolve();
       }
